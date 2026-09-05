@@ -38,6 +38,9 @@ class SpikeQuantMatMul(nn.Module):
         self.is_p = is_p
         self.width = width
         self.mode = "fake_binary_simulate"
+        
+        self.steps = int(2**x2_quant_params["addbit"])
+        self.step_levels = 2**x2_quant_params["n_bits"]
 
     @torch.no_grad()
     def add_batch(self, inp, out):        
@@ -84,6 +87,30 @@ class SpikeQuantMatMul(nn.Module):
 
     def quant_x2(self, x2):
         mask_low = self.mask_low_mse
+        if mask_low.dim() == 4:
+            if mask_low.size(2) != 1:
+                mask_low_1d = mask_low[0, 0, :, 0] 
+            else:
+                mask_low_1d = mask_low[0, 0, 0, :]
+            head_dim = mask_low_1d.size(0)
+        elif mask_low.dim() == 1:
+            mask_low_1d = mask_low
+            head_dim = mask_low_1d.size(0)
+        else:
+            raise ValueError(f"Unsupported mask_low shape: {mask_low.shape}")
+
+        head_dim_axis = None
+        for i, size in enumerate(x2.shape):
+            if size == head_dim:
+                head_dim_axis = i
+                break
+        if head_dim_axis is None:
+            raise ValueError(f"head_dim {head_dim} not found in tensor shape {x2.shape}")
+
+        mask_shape = [1] * x2.dim()
+        mask_shape[head_dim_axis] = head_dim
+        mask_low = mask_low_1d.view(mask_shape).expand_as(x2)
+        
         if self.use_act_quant:
             '''The equivalence of quantization-SNN conversion is addressed in Appendix A.3. Binary simulate is also proved equal to quantization 
             recently by Spike-Driven Transformer-V3: Yao M, Qiu X, Hu T, et al. Scaling spike-driven transformer with efficient spike firing approximation training[J]. 

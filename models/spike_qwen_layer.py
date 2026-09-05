@@ -92,10 +92,10 @@ class QuantQwenAttention(nn.Module):
         self.k_norm = OmniLlamaRMSNorm(org_module.k_norm, eps=org_module.k_norm.variance_epsilon)
 
         self.qkt_matmul = SpikeQuantMatMul(
-            args.q_quant_params, args.k_quant_params, matmul_func=torch.matmul
+            args.q_quant_params, args.k_quant_params, matmul_func=torch.matmul, width=self.head_dim
         )
         self.pv_matmul = SpikeQuantMatMul(
-            args.p_quant_params, args.v_quant_params, matmul_func=torch.matmul
+            args.p_quant_params, args.v_quant_params, matmul_func=torch.matmul, is_p=True, width=self.head_dim
         )
 
         self.use_weight_quant = False
@@ -216,7 +216,7 @@ class QuantQwenDecoderLayer(nn.Module):
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        print("position_embeddings SELF", position_embeddings)
+
         # Self Attention
         hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,

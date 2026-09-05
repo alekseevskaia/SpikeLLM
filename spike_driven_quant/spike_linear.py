@@ -88,7 +88,6 @@ class SpikeQuantLinear(nn.Module):
         return mean, mask_low
 
     def forward(self, inputs: torch.Tensor):
-        print("HGYGG")
         mask_low = self.mask_low_mse
         if len(inputs.shape)==2:
             mask_low = mask_low.squeeze(0)
@@ -150,7 +149,14 @@ class SpikeQuantLinear(nn.Module):
                 
                 spikes = torch.stack(spikes,dim=0)
                 
-                out = (torch.matmul(spikes, weight.T).sum(0) - round_zero_point * weight.sum(1)) * scale
+                weight_sum_high = (
+                weight * (~mask_low).to(weight.dtype).reshape(1, -1)
+                ).sum(1)
+
+                out = (
+                    torch.matmul(spikes, weight.T).sum(0)
+                    - round_zero_point * weight_sum_high
+                ) * scale
                 
                 out += self.fwd_func(self.act_quantizer(inputs) * mask_low, weight, bias, **self.fwd_kwargs)
                 return out
