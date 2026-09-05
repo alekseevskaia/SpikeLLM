@@ -116,7 +116,7 @@ class SpikeQuantMatMul(nn.Module):
             recently by Spike-Driven Transformer-V3: Yao M, Qiu X, Hu T, et al. Scaling spike-driven transformer with efficient spike firing approximation training[J]. 
             IEEE Transactions on Pattern Analysis and Machine Intelligence, 2025.'''
             if self.training or self.mode == "fake_binary_simulate" or self.mode == "fake_quant":
-                x2 = self.x2_quantizer(x2) * mask_low + self.x2_quantizer_high(x2) * (~mask_low)
+                x2 = self.x2_quantizer(x2).to("cuda:0") * mask_low.to("cuda:0") + self.x2_quantizer_high(x2).to("cuda:0") * (~mask_low.to("cuda:0"))
             elif self.mode == "multibit_simulate":
                 self.x2_quantizer_high.per_token_dynamic_calibration(x2)
                 inputs_int, scale, round_zero_point = self.x2_quantizer_high.fake_quant_int(x2, self.x2_quantizer_high.scale, self.x2_quantizer_high.round_zero_point)

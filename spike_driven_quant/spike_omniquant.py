@@ -325,7 +325,9 @@ def spike_omniquant(
                                 loss += loss_func(fp_inps_2[index:index+args.batch_size,], quant_out)
                         if not math.isfinite(loss.item()):
                             logger.info("Loss is NAN, stopping training")
-                            pdb.set_trace()
+                            #pdb.set_trace()
+                            optimizer.zero_grad()
+                            continue
                             
                         loss_list.append(loss.detach().cpu())
                         optimizer.zero_grad()

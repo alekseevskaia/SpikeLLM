@@ -41,6 +41,7 @@ class NativeScalerWithGradNormCount:
                     if p.grad is not None:
                         if torch.isnan(p.grad).any():
                             p.grad.data = torch.where(torch.isnan(p.grad.data), torch.zeros_like(p.grad.data), p.grad.data)
+                clip_grad=1.0
                 norm = torch.nn.utils.clip_grad_norm_(params_list, clip_grad)
             else:
                 self._scaler.unscale_(optimizer)

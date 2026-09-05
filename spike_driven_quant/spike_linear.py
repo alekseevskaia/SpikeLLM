@@ -107,8 +107,11 @@ class SpikeQuantLinear(nn.Module):
             recently by Spike-Driven Transformer-V3: Yao M, Qiu X, Hu T, et al. Scaling spike-driven transformer with efficient spike firing approximation training[J]. 
             IEEE Transactions on Pattern Analysis and Machine Intelligence, 2025.'''
             if self.training or self.mode == "fake_binary_simulate" or self.mode == "fake_quant":
-                inputs = self.act_quantizer(inputs) * mask_low + self.act_quantizer_high(inputs) * (~mask_low)
-                out = self.fwd_func(inputs, weight, bias, **self.fwd_kwargs)
+                inputs = self.act_quantizer(inputs).to("cuda:0") * mask_low.to("cuda:0") + self.act_quantizer_high(inputs).to("cuda") * (~mask_low.to("cuda"))
+                if bias is not None:
+                    out = self.fwd_func(inputs.to("cuda:0"), weight.to("cuda:0"), bias.to("cuda:0"), **self.fwd_kwargs)
+                else:
+                    out = self.fwd_func(inputs.to("cuda:0"), weight.to("cuda:0"), None, **self.fwd_kwargs)
                 return out
             elif self.mode == "fake_multibit_simulate":
                 self.act_quantizer_high.per_token_dynamic_calibration(inputs)

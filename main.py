@@ -81,7 +81,7 @@ class LLaMAChatBot:
         )
 
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        outputs = self.model.generate(**inputs, max_new_tokens=5)
+        outputs = self.model.generate(**inputs, max_new_tokens=10)
 
         response = self.tokenizer.decode(
             outputs[0][inputs.input_ids.shape[1]:],
