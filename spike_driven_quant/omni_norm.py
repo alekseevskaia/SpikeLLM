@@ -54,11 +54,11 @@ class OmniLlamaRMSNorm(nn.Module):
         variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         if self.use_temporary_parameter:
-            weight = self.temp_weight
-            bias = self.temp_bias
+            weight = self.temp_weight.to("cuda:0")
+            bias = self.temp_bias.to("cuda:0")
         else:
             weight = self.weight
             bias = self.bias if hasattr(self, 'bias') else None
 
-        return (weight * hidden_states+bias).to(input_dtype) if bias is not None else (weight * hidden_states).to(input_dtype)
+        rreturn (weight.to("cuda:0") * hidden_states+bias.to("cuda:0")).to(input_dtype) if bias is not None else (weight.to("cuda:0") * hidden_states).to(input_dtype)
 

@@ -10,6 +10,7 @@ from lm_eval import evaluator
 from pprint import pprint
 from parallel_utils import map_layers_to_multi_gpus, get_lowest_occupied_gpu
 import torch.nn as nn
+import gradio as gr
 from spike_driven_quant.spike_omniquant import spike_omniquant
 from tqdm import tqdm
 import utils
@@ -17,6 +18,7 @@ from pathlib import Path
 from categories import subcategories, categories
 
 from models.spike_llama_layer import QuantLlamaDecoderLayer
+from models.spike_qwen_layer import QuantQwenDecoderLayer
 from models.int_opt_layer import QuantOPTDecoderLayer
 from spike_driven_quant.spike_linear import SpikeQuantLinear
 
@@ -45,8 +47,47 @@ net_choices = [
     "llava-llama-2-13b-chat-lightning-preview",
     "falcon-180b",
     "falcon-7b",
-    "mixtral-8x7b"
+    "mixtral-8x7b",
+    "Qwen2-7B", 
+    "Qwen2-72B",
+    "Qwen2.5-7B", 
+    "Qwen2.5-72B", 
+    "Qwen2.5-Coder", 
+    "Qwen2.5-Math",
+    "Qwen3-0.6B",
+    "Qwen3-1.7B", 
+    "Qwen3-4B",
+    "Qwen3-8B",
+    "Qwen3-14B",
+    "Qwen3-32B"
 ]
+
+class LLaMAChatBot:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def chat(self, message: str, history: list) -> str:
+        messages = []
+        for user_msg, bot_msg in history:
+            messages.append({"role": "user", "content": user_msg})
+            messages.append({"role": "assistant", "content": bot_msg})
+        messages.append({"role": "user", "content": message})
+
+        prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        outputs = self.model.generate(**inputs, max_new_tokens=5)
+
+        response = self.tokenizer.decode(
+            outputs[0][inputs.input_ids.shape[1]:],
+            skip_special_tokens=True
+        )
+        return response
 
 
 @torch.no_grad()
@@ -66,7 +107,7 @@ def evaluate(lm, args, logger, initial_seed):
             lm.model.model.decoder.final_layer_norm.to(output_device)
             lm.model.lm_head.to(output_device)
 
-        elif "llama" in args.net.lower() or "mixtral" in args.net.lower():
+        elif "llama" in args.net.lower() or "mixtral" in args.net.lower() or "qwen" in args.net.lower():
             map_layers_to_multi_gpus(lm.model.model.layers)
             input_device = lm.model.model.layers[0].device
             output_device = lm.model.model.layers[-1].device
@@ -87,7 +128,7 @@ def evaluate(lm, args, logger, initial_seed):
     else:
         if "opt" in args.net.lower():
             lm.model.model.decoder = lm.model.model.decoder.to(lm.device)
-        elif "llama" in args.net.lower() or "mixtral" in args.net.lower():
+        elif "llama" in args.net.lower() or "mixtral" in args.net.lower() or "qwen" in args.net.lower():
             lm.model = lm.model.to(lm.device)
         elif "falcon" in args.net.lower():
             lm.model.transformer = lm.model.transformer.to(lm.device)
@@ -98,7 +139,7 @@ def evaluate(lm, args, logger, initial_seed):
         for dataset in ["wikitext2", "c4"]:
             cache_testloader = f'{args.cache_dir}/testloader_{args.model_family}_{dataset}_all.cache'
             if os.path.exists(cache_testloader):
-                testloader = torch.load(cache_testloader)
+                testloader = torch.load(cache_testloader, weights_only=False)
                 logger.info(f"load calibration from {cache_testloader}")
             else:
                 dataloader, testloader = get_loaders(
@@ -122,7 +163,7 @@ def evaluate(lm, args, logger, initial_seed):
                 batch = testenc[:, (i * lm.seqlen) : ((i + 1) * lm.seqlen)].to(lm.device)
                 if "opt" in args.net.lower():
                     outputs = lm.model.model.decoder(batch)
-                elif "llama" in args.net.lower() or "mixtral" in args.net.lower():
+                elif "llama" in args.net.lower() or "mixtral" in args.net.lower() or "qwen" in args.net.lower():
                     outputs = lm.model.model(batch)
                 elif "falcon" in args.model:
                     outputs = lm.model.transformer(batch)
@@ -191,9 +232,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, help="model name of model path")
+    parser.add_argument("--model", default="Qwen/Qwen3-8B", type=str, help="model name of model path")
     parser.add_argument("--cache_dir", default="./cache", type=str, help="cache dir of dataset, leading to faster debug")
-    parser.add_argument("--output_dir", default="../log/", type=str, help="direction of logging file")
+    parser.add_argument("--output_dir", default="/home/alekseevskaia/SpikeLLM/log/", type=str, help="direction of logging file")
     parser.add_argument("--save_dir", default=None, type=str, help="direction for saving fake quantization model")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--real_quant", default=False, action="store_true", help="real quantization, which can see memory reduce. Note that due to the limitations of AutoGPTQ kernels, the real quantization of weight-only quantization can only lead memory reduction, but with slower inference speed.")
@@ -204,7 +245,7 @@ def main():
     parser.add_argument("--nsamples", type=int, default=128, help="Number of calibration data samples.")
     parser.add_argument("--batch_size", type=int, default=1, help="batch size.")
     parser.add_argument("--seed", type=int, default=2, help="Seed for sampling the calibration data.")
-    parser.add_argument("--tasks", default="piqa,arc_easy,arc_challenge,boolq,hellaswag,winogrande")
+    parser.add_argument("--tasks", default="arc_easy,arc_challenge,boolq,hellaswag,winogrande")
     parser.add_argument("--eval_ppl", action="store_true")
     parser.add_argument("--num_fewshot", type=int, default=0)
     parser.add_argument("--wbits", type=int, default=4)
@@ -231,9 +272,10 @@ def main():
         choices=["eager", "sdpa", "flash_attention_2"],
         help="attention implementation that the model works with",
     )
+    parser.add_argument("--chatbot", default=False, action="store_true")
     parser.add_argument("--net", type=str, default=None, choices=net_choices)
-    parser.add_argument("--act-scales", type=str, default=None)
-    parser.add_argument("--act-shifts", type=str, default=None)
+    parser.add_argument("--act-scales", type=str, default="/home/alekseevskaia/OmniQuant/act_scales/Qwen3-8B.pt")
+    parser.add_argument("--act-shifts", type=str, default="/home/alekseevskaia/OmniQuant/act_shifts/Qwen3-8B.pt")
 
     parser.add_argument("--addbit", type=int, default=1)
     parser.add_argument("--low_p", type=float, default=1.0)
@@ -340,7 +382,7 @@ def main():
         # load calibration dataset
         cache_dataloader = f'{args.cache_dir}/dataloader_{args.model_family}_{args.calib_dataset}_{args.nsamples}.cache'
         if os.path.exists(cache_dataloader):
-            dataloader = torch.load(cache_dataloader)
+            dataloader = torch.load(cache_dataloader, weights_only=False)
             logger.info(f"load calibration from {cache_dataloader}")
         else:
             dataloader, _ = get_loaders(
@@ -354,8 +396,8 @@ def main():
         act_scales = None
         act_shifts = None
         if args.let:
-            act_scales = torch.load(args.act_scales)
-            act_shifts = torch.load(args.act_shifts)
+            act_scales = torch.load(args.act_scales, weights_only=False)
+            act_shifts = torch.load(args.act_shifts, weights_only=False)
         spike_omniquant(
             lm,
             args,
@@ -365,13 +407,18 @@ def main():
             logger,
         )
         logger.info(time.time() - tick)
+        
+    if args.chatbot:
+        bot = LLaMAChatBot(lm.model, lm.tokenizer)
+        gr.ChatInterface(fn=bot.chat, title="Qwen3 Чат").launch()
+        
     if args.save_dir:
         # delete omni parameters
         for name, module in lm.model.named_modules():
             if isinstance(module, SpikeQuantLinear):
                 del module.weight_quantizer.lowbound_factor
                 del module.weight_quantizer.upbound_factor
-            if isinstance(module,QuantLlamaDecoderLayer) or isinstance(module,QuantOPTDecoderLayer):
+            if isinstance(module,QuantLlamaDecoderLayer) or isinstance(module,QuantOPTDecoderLayer) or isinstance(module,QuantQwenDecoderLayer):
                 if args.let:
                     del module.qkv_smooth_scale
                     del module.qkv_smooth_shift

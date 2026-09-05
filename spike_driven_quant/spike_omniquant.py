@@ -3,6 +3,7 @@ import torch.nn as nn
 from models.spike_llama_layer import QuantLlamaDecoderLayer
 from models.int_opt_layer import QuantOPTDecoderLayer
 from models.int_falcon_layer import QuantFalconDecoderLayer
+from models.int_qwen_layer import QuantQwenDecoderLayer
 from spike_driven_quant.spike_linear import SpikeQuantLinear
 from spike_driven_quant.spike_matmul import SpikeQuantMatMul
 from contextlib import nullcontext
@@ -88,6 +89,7 @@ def spike_omniquant(
     
     # move embedding layer and first layer to target device
     model = lm.model
+    model.to("cuda:0")
     dev = lm.device
     use_cache = model.config.use_cache
     model.config.use_cache = False
@@ -132,6 +134,18 @@ def spike_omniquant(
         model.model.embed_tokens = model.model.embed_tokens.to(dev)
         model.model.norm = model.model.norm.to(dev)
         layer_name_prefix = "model.layers"
+    elif "qwen" in args.net.lower():
+            is_llama = True
+            layers = model.model.layers
+            model.model.embed_tokens = model.model.embed_tokens.to(dev)
+            model.model.norm = model.model.norm.to(dev)
+            DecoderLayer = QuantQwenDecoderLayer
+            pairs = {
+                "q_proj":"qkv",
+                "o_proj":"out",
+                "up_proj":"fc1"
+            }
+            layer_name_prefix = "model.layers"
     else:
         raise ValueError("Only support for opt/llama/Llama-2/falcon/mixtral now")
     
@@ -165,9 +179,12 @@ def spike_omniquant(
 
     layers[0] = Catcher(layers[0])
     layers[0].is_llama = is_llama
+    
+    input_ids = []
 
     with torch.no_grad():
         for batch in dataloader:
+            input_ids.append(batch[0][0])
             if cache["i"] >= args.nsamples:
                 break
             try:
@@ -177,10 +194,10 @@ def spike_omniquant(
     
     # move embedding layer and first layer to cpu
     layers[0] = layers[0].module
-    layers[0] = layers[0].cpu()
-    if "llama" in args.net.lower() or "mixtral" in args.net.lower():
-        model.model.embed_tokens = model.model.embed_tokens.cpu()
-        model.model.norm = model.model.norm.cpu()
+    if "llama" in args.net.lower() or "mixtral" in args.net.lower() or "qwen" in args.net.lower():
+        # model.model.embed_tokens = model.model.embed_tokens.cpu()
+        # model.model.norm = model.model.norm.cpu()
+        pass
     elif "opt" in args.net.lower():
         model.model.decoder.embed_tokens = model.model.decoder.embed_tokens.cpu()
         model.model.decoder.embed_positions = model.model.decoder.embed_positions.cpu()
@@ -217,7 +234,9 @@ def spike_omniquant(
     else:
         position_ids = None
 
-
+    input_ids = torch.stack(input_ids).to("cuda:0")
+    input_embeds = model.model.embed_tokens(input_ids)
+    position_embeddings = model.model.rotary_emb(input_embeds, position_ids=position_ids)
 
     if args.resume:
         omni_parameters = torch.load(args.resume)
@@ -240,7 +259,12 @@ def spike_omniquant(
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
                     for j in range(args.nsamples):
-                        fp_inps[j] = qlayer(fp_inps[j].unsqueeze(0), attention_mask=attention_mask,position_ids=position_ids)[0]
+                        fp_inps[j] = qlayer(
+                            fp_inps[j].unsqueeze(0),
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            position_embeddings=position_embeddings,
+                        )[0]
                         if args.aug_loss:
                             fp_inps_2[j] = qlayer(quant_inps[j].unsqueeze(0), attention_mask=attention_mask,position_ids=position_ids)[0]
 
@@ -255,7 +279,8 @@ def spike_omniquant(
             use_shift = False                   # deactivate channel-wise shifting for llama model and weight-only quantization
         if args.let:
             # init channel-wise scaling and shift
-            qlayer.register_parameter("qkt_smooth_scale",torch.nn.Parameter(torch.ones(layer.self_attn.q_proj.out_features,device=dev, dtype=dtype)))
+            k_out_features = layer.self_attn.k_proj.out_features
+            qlayer.register_parameter("qkt_smooth_scale", torch.nn.Parameter(torch.ones(k_out_features, device=dev, dtype=dtype)))
             for name,module in qlayer.named_modules():
                 if isinstance(module, SpikeQuantLinear):
                     for key in pairs.keys():
@@ -291,7 +316,12 @@ def spike_omniquant(
                         # obtain output of quantization model
                         with traincast():
                             smooth_and_quant_temporary(qlayer, args, is_llama)
-                            quant_out = qlayer(quant_inps[index:index+args.batch_size,], attention_mask=attention_mask_batch,position_ids=position_ids)[0]
+                            quant_out = qlayer(
+                                quant_inps[index:index+args.batch_size,],
+                                attention_mask=attention_mask_batch,
+                                position_ids=position_ids,
+                                position_embeddings=position_embeddings,
+                            )[0]
                             loss = loss_func(fp_inps[index:index+args.batch_size,], quant_out)
                             if args.aug_loss:
                                 loss += loss_func(fp_inps_2[index:index+args.batch_size,], quant_out)
@@ -301,7 +331,7 @@ def spike_omniquant(
                             
                         loss_list.append(loss.detach().cpu())
                         optimizer.zero_grad()
-                        norm = loss_scaler(loss, optimizer,parameters= get_omni_parameters(qlayer, use_shift)).cpu()
+                        norm = loss_scaler(loss, optimizer, clip_grad=1.0, parameters=get_omni_parameters(qlayer, use_shift)).cpu()
                         norm_list.append(norm.data)
                     # except:
                     #     print("########### one false ###########")
@@ -321,7 +351,12 @@ def spike_omniquant(
                 with torch.cuda.amp.autocast():
                 # with traincast():
                     for j in range(args.nsamples):
-                        quant_inps[j] = qlayer(quant_inps[j].unsqueeze(0), attention_mask=attention_mask,position_ids=position_ids)[0]
+                        quant_inps[j] = qlayer(
+                            quant_inps[j].unsqueeze(0),
+                            attention_mask=attention_mask,
+                            position_ids=position_ids,
+                            position_embeddings=position_embeddings,
+                        )[0]
             register_scales_and_zeros(qlayer)
             layers[i] = qlayer.to("cpu")
             omni_parameters[i] = omni_state_dict(qlayer)
