@@ -120,7 +120,12 @@ class QuantQwenAttention(nn.Module):
         key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
-        cos, sin = position_embeddings
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+        else:
+            position_ids = kwargs.get("position_ids", None)
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+            
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_values is not None:
@@ -133,7 +138,7 @@ class QuantQwenAttention(nn.Module):
 
         query_states = self.qkt_matmul.quant_x1(query_states)
         key_states = self.qkt_matmul.quant_x2(key_states)
-        attn_weights = self.qkt_matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = self.qkt_matmul((query_states, key_states.transpose(2, 3))) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -153,7 +158,7 @@ class QuantQwenAttention(nn.Module):
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = self.pv_matmul.quant_x1(attn_weights)
         value_states = self.pv_matmul.quant_x2(value_states)
-        attn_output = self.pv_matmul(attn_weights, value_states)
+        attn_output = self.pv_matmul((attn_weights, value_states))
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -211,7 +216,7 @@ class QuantQwenDecoderLayer(nn.Module):
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-
+        print("position_embeddings SELF", position_embeddings)
         # Self Attention
         hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,

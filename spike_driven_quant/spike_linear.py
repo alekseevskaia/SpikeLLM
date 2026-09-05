@@ -88,7 +88,7 @@ class SpikeQuantLinear(nn.Module):
         return mean, mask_low
 
     def forward(self, inputs: torch.Tensor):
-        
+        print("HGYGG")
         mask_low = self.mask_low_mse
         if len(inputs.shape)==2:
             mask_low = mask_low.squeeze(0)

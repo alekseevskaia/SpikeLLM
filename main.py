@@ -274,8 +274,8 @@ def main():
     )
     parser.add_argument("--chatbot", default=False, action="store_true")
     parser.add_argument("--net", type=str, default=None, choices=net_choices)
-    parser.add_argument("--act-scales", type=str, default="/home/alekseevskaia/OmniQuant/act_scales/Qwen3-8B.pt")
-    parser.add_argument("--act-shifts", type=str, default="/home/alekseevskaia/OmniQuant/act_shifts/Qwen3-8B.pt")
+    parser.add_argument("--act-scales", type=str, default="/home/alekseevskaia/SpikeLLM/act_scales/Qwen3-8B.pt")
+    parser.add_argument("--act-shifts", type=str, default="/home/alekseevskaia/SpikeLLM/act_shifts/Qwen3-8B.pt")
 
     parser.add_argument("--addbit", type=int, default=1)
     parser.add_argument("--low_p", type=float, default=1.0)

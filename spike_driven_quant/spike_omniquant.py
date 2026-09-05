@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 from models.spike_llama_layer import QuantLlamaDecoderLayer
+from models.spike_qwen_layer import QuantQwenDecoderLayer
 from models.int_opt_layer import QuantOPTDecoderLayer
 from models.int_falcon_layer import QuantFalconDecoderLayer
-from models.int_qwen_layer import QuantQwenDecoderLayer
 from spike_driven_quant.spike_linear import SpikeQuantLinear
 from spike_driven_quant.spike_matmul import SpikeQuantMatMul
 from contextlib import nullcontext
@@ -52,7 +52,7 @@ def find_layers(module, layers=[SpikeQuantLinear, SpikeQuantMatMul], name=''):
     return res
 
 
-def static(layer, nsamples, inps, attention_mask, position_ids): 
+def static(layer, nsamples, inps, attention_mask, position_ids, position_embeddings=None): 
     print("Starting ...")
 
     samples = nsamples
@@ -68,7 +68,7 @@ def static(layer, nsamples, inps, attention_mask, position_ids):
     for name in subset:
         handles.append(subset[name].register_forward_hook(add_batch(name)))
     for j in range(samples):
-        res = layer(inps[j].unsqueeze(0), attention_mask=attention_mask,position_ids=position_ids)[0]
+        res = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids, position_embeddings=position_embeddings)[0]
     for h in handles:
         h.remove()
     
@@ -135,17 +135,17 @@ def spike_omniquant(
         model.model.norm = model.model.norm.to(dev)
         layer_name_prefix = "model.layers"
     elif "qwen" in args.net.lower():
-            is_llama = True
-            layers = model.model.layers
-            model.model.embed_tokens = model.model.embed_tokens.to(dev)
-            model.model.norm = model.model.norm.to(dev)
-            DecoderLayer = QuantQwenDecoderLayer
-            pairs = {
-                "q_proj":"qkv",
-                "o_proj":"out",
-                "up_proj":"fc1"
-            }
-            layer_name_prefix = "model.layers"
+        is_llama = True
+        layers = model.model.layers
+        model.model.embed_tokens = model.model.embed_tokens.to(dev)
+        model.model.norm = model.model.norm.to(dev)
+        DecoderLayer = QuantQwenDecoderLayer
+        pairs = {
+            "q_proj":"qkv",
+            "o_proj":"out",
+            "up_proj":"fc1"
+        }
+        layer_name_prefix = "model.layers"
     else:
         raise ValueError("Only support for opt/llama/Llama-2/falcon/mixtral now")
     
@@ -237,13 +237,12 @@ def spike_omniquant(
     input_ids = torch.stack(input_ids).to("cuda:0")
     input_embeds = model.model.embed_tokens(input_ids)
     position_embeddings = model.model.rotary_emb(input_embeds, position_ids=position_ids)
+    #print("position_embeddings", position_embeddings)
 
     if args.resume:
         omni_parameters = torch.load(args.resume)
     else:
         omni_parameters = {}
-
-    
     
     for i in range(len(layers)):
         logger.info(f"=== Start quantize layer {i} ===")
@@ -268,8 +267,7 @@ def spike_omniquant(
                         if args.aug_loss:
                             fp_inps_2[j] = qlayer(quant_inps[j].unsqueeze(0), attention_mask=attention_mask,position_ids=position_ids)[0]
 
-                    static(qlayer, args.nsamples, quant_inps, attention_mask, position_ids) ##############################
-
+                    static(qlayer, args.nsamples, quant_inps, attention_mask, position_ids, position_embeddings) ##############################
 
         # init smooth parameters
         set_quant_state(qlayer, weight_quant=False, act_quant=True)  # weight will be manually quantized before forward

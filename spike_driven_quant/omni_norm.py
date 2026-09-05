@@ -60,5 +60,5 @@ class OmniLlamaRMSNorm(nn.Module):
             weight = self.weight
             bias = self.bias if hasattr(self, 'bias') else None
 
-        rreturn (weight.to("cuda:0") * hidden_states+bias.to("cuda:0")).to(input_dtype) if bias is not None else (weight.to("cuda:0") * hidden_states).to(input_dtype)
+        return (weight.to("cuda:0") * hidden_states+bias.to("cuda:0")).to(input_dtype) if bias is not None else (weight.to("cuda:0") * hidden_states).to(input_dtype)
 
